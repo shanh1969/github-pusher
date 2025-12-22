@@ -403,6 +403,31 @@ export default function Home() {
 
     try {
       const [owner, repo] = project.githubRepo.split('/');
+      
+      // Try to fetch package.json to get version number
+      let version = '';
+      try {
+        const packageResponse = await fetch(
+          `https://api.github.com/repos/${owner}/${repo}/contents/package.json?ref=${project.branch}`,
+          {
+            headers: {
+              'Authorization': `Bearer ${githubToken}`,
+              'Accept': 'application/vnd.github.v3+json',
+            },
+          }
+        );
+        if (packageResponse.ok) {
+          const packageData = await packageResponse.json();
+          const packageContent = JSON.parse(atob(packageData.content));
+          if (packageContent.version) {
+            version = `_v${packageContent.version}`;
+          }
+        }
+      } catch (versionError) {
+        // If we can't get version, just continue without it
+        console.log('Could not fetch version:', versionError);
+      }
+      
       const response = await fetch(
         `/api/download?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}&branch=${encodeURIComponent(project.branch)}`,
         {
@@ -421,13 +446,14 @@ export default function Home() {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${project.name}.zip`;
+      const filename = `${project.name}${version}.zip`;
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
 
-      alert(`Downloaded ${project.name}.zip to your Downloads folder!`);
+      alert(`Downloaded ${filename} to your Downloads folder!`);
     } catch (error: any) {
       alert(`Download failed: ${error.message}`);
     } finally {
