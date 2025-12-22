@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export async function POST(request: NextRequest) {
   try {
-    const { messages, apiKey } = await request.json();
+    const { messages, apiKey, model } = await request.json();
 
     if (!apiKey) {
       return NextResponse.json({ error: 'Missing Claude API key' }, { status: 401 });
@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-opus-4-5-20251101',
+        model: model || 'claude-opus-4-5-20251101',
         max_tokens: 4096,
         messages: messages,
         system: `You are a helpful coding assistant. You help users understand, modify, and improve their code. When providing code changes, be specific about what files to modify and show the exact code. Keep responses concise but thorough.`,

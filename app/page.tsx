@@ -150,6 +150,13 @@ export default function Home() {
   const [chatInput, setChatInput] = useState<string>('');
   const [isSending, setIsSending] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const [selectedModel, setSelectedModel] = useState<string>('claude-opus-4-5-20251101');
+
+  const modelOptions = [
+    { id: 'claude-opus-4-5-20251101', name: 'Opus 4.5', desc: 'Most capable' },
+    { id: 'claude-sonnet-4-20250514', name: 'Sonnet 4', desc: 'Fast & smart' },
+    { id: 'claude-3-5-haiku-20241022', name: 'Haiku 3.5', desc: 'Fastest' },
+  ];
 
   // Load projects and tokens from localStorage
   useEffect(() => {
@@ -214,6 +221,7 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           apiKey: claudeApiKey,
+          model: selectedModel,
           messages: [...chatMessages, userMessage].map(m => ({
             role: m.role,
             content: m.content,
@@ -746,9 +754,22 @@ export default function Home() {
                 <p className="text-xs text-zinc-500">Ask me about your code</p>
               </div>
               {claudeApiKey && (
-                <span className="ml-auto text-xs bg-emerald-600/20 text-emerald-400 px-2 py-1 rounded">
-                  Connected
-                </span>
+                <div className="ml-auto flex items-center gap-3">
+                  <select
+                    value={selectedModel}
+                    onChange={(e) => setSelectedModel(e.target.value)}
+                    className="bg-zinc-800 text-sm border border-zinc-700 rounded-lg px-3 py-1.5 text-zinc-300 focus:outline-none focus:border-emerald-500"
+                  >
+                    {modelOptions.map(model => (
+                      <option key={model.id} value={model.id}>
+                        {model.name} - {model.desc}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="text-xs bg-emerald-600/20 text-emerald-400 px-2 py-1 rounded">
+                    Connected
+                  </span>
+                </div>
               )}
             </div>
           </div>
