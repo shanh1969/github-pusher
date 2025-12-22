@@ -395,16 +395,18 @@ export default function Home() {
     try {
       const [owner, repo] = project.githubRepo.split('/');
       const response = await fetch(
-        `https://api.github.com/repos/${owner}/${repo}/zipball/${project.branch}`,
+        `/api/download?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}&branch=${encodeURIComponent(project.branch)}`,
         {
           headers: {
             'Authorization': `Bearer ${githubToken}`,
-            'Accept': 'application/vnd.github.v3+json',
           },
         }
       );
 
-      if (!response.ok) throw new Error(`GitHub API error: ${response.status}`);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Download failed: ${response.status}`);
+      }
 
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
