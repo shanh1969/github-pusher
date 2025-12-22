@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import dynamic from 'next/dynamic';
 
 // Dynamically import Monaco to avoid SSR issues
@@ -63,6 +63,12 @@ const UploadIcon = () => (
 const DownloadIcon = () => (
   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+  </svg>
+);
+
+const UploadZipIcon = () => (
+  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
   </svg>
 );
 
@@ -129,6 +135,9 @@ export default function Home() {
   const [newProject, setNewProject] = useState({ name: '', githubRepo: '', driveFolderId: '', branch: 'main' });
   const [modifiedFiles, setModifiedFiles] = useState<Map<string, string>>(new Map());
   const [downloadingProject, setDownloadingProject] = useState<string | null>(null);
+  const [uploadingProject, setUploadingProject] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadTargetProject, setUploadTargetProject] = useState<Project | null>(null);
 
   // Load projects and token from localStorage
   useEffect(() => {
@@ -426,6 +435,61 @@ export default function Home() {
     }
   };
 
+  // Trigger file input for upload
+  const triggerUpload = (project: Project, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!githubToken) {
+      alert('Please set your GitHub token in Settings first');
+      setShowSettings(true);
+      return;
+    }
+    setUploadTargetProject(project);
+    fileInputRef.current?.click();
+  };
+
+  // Handle ZIP file upload
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !uploadTargetProject) return;
+
+    setUploadingProject(uploadTargetProject.id);
+
+    try {
+      const [owner, repo] = uploadTargetProject.githubRepo.split('/');
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('owner', owner);
+      formData.append('repo', repo);
+      formData.append('branch', uploadTargetProject.branch);
+      formData.append('commitMessage', `Update from ZIP upload - ${new Date().toLocaleString()}`);
+
+      const response = await fetch('/api/upload', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${githubToken}`,
+        },
+        body: formData,
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Upload failed');
+      }
+
+      alert(`Success! ${result.message}`);
+    } catch (error: any) {
+      alert(`Upload failed: ${error.message}`);
+    } finally {
+      setUploadingProject(null);
+      setUploadTargetProject(null);
+      // Reset file input
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
   // Select project
   const selectProject = (project: Project) => {
     setSelectedProject(project);
@@ -536,6 +600,18 @@ export default function Home() {
                           <div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin"></div>
                         ) : (
                           <DownloadIcon />
+                        )}
+                      </button>
+                      <button
+                        onClick={(e) => triggerUpload(project, e)}
+                        disabled={uploadingProject === project.id}
+                        className="p-1.5 hover:bg-emerald-600/20 rounded transition-all text-emerald-400 hover:text-emerald-300"
+                        title="Upload ZIP to GitHub"
+                      >
+                        {uploadingProject === project.id ? (
+                          <div className="w-4 h-4 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin"></div>
+                        ) : (
+                          <UploadZipIcon />
                         )}
                       </button>
                       <button
@@ -839,6 +915,15 @@ export default function Home() {
           </div>
         </div>
       )}
+
+      {/* Hidden file input for ZIP upload */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileUpload}
+        accept=".zip"
+        className="hidden"
+      />
     </main>
   );
 }
