@@ -151,6 +151,9 @@ export default function Home() {
   const [isSending, setIsSending] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const [selectedModel, setSelectedModel] = useState<string>('claude-opus-4-5-20251101');
+  const [loadedFiles, setLoadedFiles] = useState<{ path: string; content: string }[]>([]);
+  const [loadedProjectName, setLoadedProjectName] = useState<string>('');
+  const [isLoadingFiles, setIsLoadingFiles] = useState(false);
 
   const modelOptions = [
     { id: 'claude-opus-4-5-20251101', name: 'Opus 4.5', desc: 'Most capable' },
@@ -216,12 +219,20 @@ export default function Home() {
     setIsSending(true);
 
     try {
+      // Build file context if files are loaded
+      let fileContext = '';
+      if (loadedFiles.length > 0) {
+        fileContext = loadedFiles.map(f => `--- ${f.path} ---\n${f.content}`).join('\n\n');
+      }
+
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           apiKey: claudeApiKey,
           model: selectedModel,
+          fileContext: fileContext,
+          projectName: loadedProjectName,
           messages: [...chatMessages, userMessage].map(m => ({
             role: m.role,
             content: m.content,
@@ -471,6 +482,88 @@ export default function Home() {
     }
   };
 
+  // Load project files into chat context
+  const loadProjectFiles = async (project: Project, e: React.MouseEvent) => {
+    e.stopPropagation();
+
+    if (!githubToken) {
+      alert('Please set your GitHub token in Settings first');
+      setShowSettings(true);
+      return;
+    }
+
+    setIsLoadingFiles(true);
+    setDownloadingProject(project.id);
+
+    try {
+      const [owner, repo] = project.githubRepo.split('/');
+
+      // Fetch repository tree recursively
+      const treeResponse = await fetch(
+        `https://api.github.com/repos/${owner}/${repo}/git/trees/${project.branch}?recursive=1`,
+        {
+          headers: {
+            'Authorization': `Bearer ${githubToken}`,
+            'Accept': 'application/vnd.github.v3+json',
+          },
+        }
+      );
+
+      if (!treeResponse.ok) throw new Error('Failed to fetch repository');
+
+      const treeData = await treeResponse.json();
+
+      // Filter for code files only (skip large/binary files)
+      const codeExtensions = ['.js', '.jsx', '.ts', '.tsx', '.json', '.css', '.scss', '.html', '.md', '.py', '.sql', '.yaml', '.yml', '.env.example', '.gitignore'];
+      const codeFiles = treeData.tree.filter((item: any) =>
+        item.type === 'blob' &&
+        item.size < 50000 && // Skip files > 50KB
+        codeExtensions.some(ext => item.path.toLowerCase().endsWith(ext))
+      ).slice(0, 30); // Limit to 30 files to avoid token limits
+
+      // Fetch content for each file
+      const fileContents: { path: string; content: string }[] = [];
+      for (const file of codeFiles) {
+        try {
+          const contentResponse = await fetch(
+            `https://api.github.com/repos/${owner}/${repo}/contents/${file.path}?ref=${project.branch}`,
+            {
+              headers: {
+                'Authorization': `Bearer ${githubToken}`,
+                'Accept': 'application/vnd.github.v3+json',
+              },
+            }
+          );
+          if (contentResponse.ok) {
+            const contentData = await contentResponse.json();
+            const content = atob(contentData.content);
+            fileContents.push({ path: file.path, content });
+          }
+        } catch (err) {
+          console.log(`Skipped ${file.path}`);
+        }
+      }
+
+      setLoadedFiles(fileContents);
+      setLoadedProjectName(project.name);
+      setChatMessages([]); // Clear previous chat
+
+      // Auto-send initial message with file context
+      const fileList = fileContents.map(f => f.path).join('\n');
+      const initialMessage: ChatMessage = {
+        role: 'assistant',
+        content: `I've loaded **${project.name}** with ${fileContents.length} files:\n\n\`\`\`\n${fileList}\n\`\`\`\n\nI can see all the code. What changes would you like me to help you make?`
+      };
+      setChatMessages([initialMessage]);
+
+    } catch (error: any) {
+      alert(`Failed to load project: ${error.message}`);
+    } finally {
+      setIsLoadingFiles(false);
+      setDownloadingProject(null);
+    }
+  };
+
   // Download repo as ZIP
   const downloadRepo = async (project: Project, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -699,12 +792,26 @@ export default function Home() {
                     </div>
                     <div className="flex items-center gap-1">
                       <button
+                        onClick={(e) => loadProjectFiles(project, e)}
+                        disabled={downloadingProject === project.id || isLoadingFiles}
+                        className="p-1.5 hover:bg-purple-600/20 rounded transition-all text-purple-400 hover:text-purple-300"
+                        title="Load into Chat"
+                      >
+                        {isLoadingFiles && downloadingProject === project.id ? (
+                          <div className="w-4 h-4 border-2 border-purple-400 border-t-transparent rounded-full animate-spin"></div>
+                        ) : (
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                          </svg>
+                        )}
+                      </button>
+                      <button
                         onClick={(e) => downloadRepo(project, e)}
                         disabled={downloadingProject === project.id}
                         className="p-1.5 hover:bg-blue-600/20 rounded transition-all text-blue-400 hover:text-blue-300"
                         title="Download ZIP"
                       >
-                        {downloadingProject === project.id ? (
+                        {downloadingProject === project.id && !isLoadingFiles ? (
                           <div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin"></div>
                         ) : (
                           <DownloadIcon />
@@ -751,7 +858,9 @@ export default function Home() {
               </div>
               <div>
                 <h2 className="font-semibold">Claude AI Assistant</h2>
-                <p className="text-xs text-zinc-500">Ask me about your code</p>
+                <p className="text-xs text-zinc-500">
+                  {loadedProjectName ? `Working on: ${loadedProjectName} (${loadedFiles.length} files)` : 'Ask me about your code'}
+                </p>
               </div>
               {claudeApiKey && (
                 <div className="ml-auto flex items-center gap-3">
