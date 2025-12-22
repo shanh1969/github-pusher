@@ -18,10 +18,18 @@ export async function POST(request: NextRequest) {
     if (fileContext && projectName) {
       systemPrompt = `You are a helpful coding assistant working on the "${projectName}" project. The user has loaded the following files from their project. You can see all the code and should help them make changes.
 
-When suggesting code changes:
-1. Show the complete modified code (not just snippets)
-2. Specify which file to modify
-3. Explain what you changed and why
+IMPORTANT: When suggesting code changes, format them EXACTLY like this so they can be auto-applied:
+
+**path/to/file.tsx**
+\`\`\`typescript
+// complete file content here
+\`\`\`
+
+Rules:
+1. ALWAYS show the COMPLETE file content, not just snippets
+2. Put the file path in bold (**path**) on its own line, then the code block
+3. Use the exact file path from the project
+4. The user can click "Apply to GitHub" to push your changes directly
 
 PROJECT FILES:
 ${fileContext}

@@ -154,6 +154,9 @@ export default function Home() {
   const [loadedFiles, setLoadedFiles] = useState<{ path: string; content: string }[]>([]);
   const [loadedProjectName, setLoadedProjectName] = useState<string>('');
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
+  const [pendingChanges, setPendingChanges] = useState<{ path: string; content: string }[]>([]);
+  const [isApplying, setIsApplying] = useState(false);
+  const [loadedProject, setLoadedProject] = useState<Project | null>(null);
 
   const modelOptions = [
     { id: 'claude-opus-4-5-20251101', name: 'Opus 4.5', desc: 'Most capable' },
@@ -203,6 +206,121 @@ export default function Home() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
 
+  // Parse code changes from Claude's response
+  const parseCodeChanges = (content: string): { path: string; content: string }[] => {
+    const changes: { path: string; content: string }[] = [];
+
+    // Pattern 1: Look for file paths followed by code blocks
+    // Matches: "**file.tsx**" or "`file.tsx`" or "file.tsx:" followed by ```code```
+    const patterns = [
+      // Pattern: **path/to/file.tsx** followed by ```...```
+      /\*\*([a-zA-Z0-9_\-./]+\.[a-zA-Z]+)\*\*[:\s]*\n*```[\w]*\n([\s\S]*?)```/g,
+      // Pattern: `path/to/file.tsx` followed by ```...```
+      /`([a-zA-Z0-9_\-./]+\.[a-zA-Z]+)`[:\s]*\n*```[\w]*\n([\s\S]*?)```/g,
+      // Pattern: path/to/file.tsx: followed by ```...```
+      /([a-zA-Z0-9_\-./]+\.[a-zA-Z]+):\s*\n*```[\w]*\n([\s\S]*?)```/g,
+      // Pattern: --- path/to/file.tsx --- followed by code
+      /---\s*([a-zA-Z0-9_\-./]+\.[a-zA-Z]+)\s*---\n([\s\S]*?)(?=\n---|\n```|$)/g,
+    ];
+
+    for (const pattern of patterns) {
+      let match;
+      while ((match = pattern.exec(content)) !== null) {
+        const filePath = match[1];
+        const code = match[2].trim();
+
+        // Only add if it looks like a real file path and has content
+        if (filePath && code && filePath.includes('.') && !changes.find(c => c.path === filePath)) {
+          changes.push({ path: filePath, content: code });
+        }
+      }
+    }
+
+    return changes;
+  };
+
+  // Apply code changes to GitHub
+  const applyChangesToGitHub = async () => {
+    if (!loadedProject || !githubToken || pendingChanges.length === 0) {
+      alert('No changes to apply or project not loaded');
+      return;
+    }
+
+    setIsApplying(true);
+
+    try {
+      const [owner, repo] = loadedProject.githubRepo.split('/');
+      let successCount = 0;
+
+      for (const change of pendingChanges) {
+        // Get current file SHA if it exists
+        let sha = '';
+        try {
+          const getResponse = await fetch(
+            `https://api.github.com/repos/${owner}/${repo}/contents/${change.path}?ref=${loadedProject.branch}`,
+            {
+              headers: {
+                'Authorization': `Bearer ${githubToken}`,
+                'Accept': 'application/vnd.github.v3+json',
+              },
+            }
+          );
+          if (getResponse.ok) {
+            const data = await getResponse.json();
+            sha = data.sha;
+          }
+        } catch (e) {
+          // File doesn't exist, will create new
+        }
+
+        // Update/create file
+        const updateResponse = await fetch(
+          `https://api.github.com/repos/${owner}/${repo}/contents/${change.path}`,
+          {
+            method: 'PUT',
+            headers: {
+              'Authorization': `Bearer ${githubToken}`,
+              'Accept': 'application/vnd.github.v3+json',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              message: `Update ${change.path} via Claude AI`,
+              content: btoa(unescape(encodeURIComponent(change.content))),
+              sha: sha || undefined,
+              branch: loadedProject.branch,
+            }),
+          }
+        );
+
+        if (updateResponse.ok) {
+          successCount++;
+        }
+      }
+
+      alert(`Successfully applied ${successCount}/${pendingChanges.length} changes to GitHub!`);
+      setPendingChanges([]);
+
+      // Update loaded files with the new content
+      setLoadedFiles(prev => {
+        const updated = [...prev];
+        for (const change of pendingChanges) {
+          const idx = updated.findIndex(f => f.path === change.path);
+          if (idx >= 0) {
+            updated[idx] = { ...updated[idx], content: change.content };
+          } else {
+            updated.push(change);
+          }
+        }
+        return updated;
+      });
+
+    } catch (error: any) {
+      alert(`Failed to apply changes: ${error.message}`);
+    } finally {
+      setIsApplying(false);
+    }
+  };
+
   // Send message to Claude
   const sendMessage = async () => {
     if (!chatInput.trim() || isSending) return;
@@ -246,11 +364,18 @@ export default function Home() {
         throw new Error(data.error || 'Failed to get response');
       }
 
+      const responseText = data.content?.[0]?.text || 'No response';
       const assistantMessage: ChatMessage = {
         role: 'assistant',
-        content: data.content?.[0]?.text || 'No response',
+        content: responseText,
       };
       setChatMessages(prev => [...prev, assistantMessage]);
+
+      // Parse for code changes
+      const changes = parseCodeChanges(responseText);
+      if (changes.length > 0) {
+        setPendingChanges(changes);
+      }
     } catch (error: any) {
       alert(`Chat error: ${error.message}`);
     } finally {
@@ -546,6 +671,8 @@ export default function Home() {
 
       setLoadedFiles(fileContents);
       setLoadedProjectName(project.name);
+      setLoadedProject(project);
+      setPendingChanges([]); // Clear any pending changes
       setChatMessages([]); // Clear previous chat
 
       // Auto-send initial message with file context
@@ -926,6 +1053,44 @@ export default function Home() {
             )}
             <div ref={chatEndRef} />
           </div>
+
+          {/* Apply Changes Banner */}
+          {pendingChanges.length > 0 && loadedProject && (
+            <div className="p-3 border-t border-emerald-600/30 bg-emerald-900/20">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <svg className="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span className="text-sm text-emerald-300">
+                    {pendingChanges.length} file{pendingChanges.length > 1 ? 's' : ''} ready to apply: {pendingChanges.map(c => c.path).join(', ')}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setPendingChanges([])}
+                    className="px-3 py-1.5 text-sm text-zinc-400 hover:text-zinc-200 transition-colors"
+                  >
+                    Dismiss
+                  </button>
+                  <button
+                    onClick={applyChangesToGitHub}
+                    disabled={isApplying}
+                    className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2"
+                  >
+                    {isApplying ? (
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    ) : (
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                      </svg>
+                    )}
+                    Apply to GitHub
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Chat Input */}
           <div className="p-4 border-t border-zinc-800 bg-zinc-900/80">
