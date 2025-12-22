@@ -146,6 +146,7 @@ export default function Home() {
 
   // Chat state
   const [claudeApiKey, setClaudeApiKey] = useState<string>('');
+  const [geminiApiKey, setGeminiApiKey] = useState<string>('');
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState<string>('');
   const [isSending, setIsSending] = useState(false);
@@ -159,9 +160,12 @@ export default function Home() {
   const [loadedProject, setLoadedProject] = useState<Project | null>(null);
 
   const modelOptions = [
-    { id: 'claude-opus-4-5-20251101', name: 'Opus 4.5', desc: 'Most capable' },
-    { id: 'claude-sonnet-4-20250514', name: 'Sonnet 4', desc: 'Fast & smart' },
-    { id: 'claude-3-5-haiku-20241022', name: 'Haiku 3.5', desc: 'Fastest' },
+    { id: 'claude-opus-4-5-20251101', name: 'Claude Opus 4.5', desc: 'Most capable', provider: 'claude' },
+    { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', desc: 'Fast & smart', provider: 'claude' },
+    { id: 'claude-3-5-haiku-20241022', name: 'Claude Haiku 3.5', desc: 'Fastest', provider: 'claude' },
+    { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', desc: 'Fast & free', provider: 'gemini' },
+    { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', desc: 'Advanced', provider: 'gemini' },
+    { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', desc: 'Quick', provider: 'gemini' },
   ];
 
   // Load projects and tokens from localStorage
@@ -169,6 +173,7 @@ export default function Home() {
     const savedProjects = localStorage.getItem('pusher_projects');
     const savedToken = localStorage.getItem('pusher_github_token');
     const savedClaudeKey = localStorage.getItem('pusher_claude_api_key');
+    const savedGeminiKey = localStorage.getItem('pusher_gemini_api_key');
     if (savedProjects) {
       setProjects(JSON.parse(savedProjects));
     }
@@ -177,6 +182,9 @@ export default function Home() {
     }
     if (savedClaudeKey) {
       setClaudeApiKey(savedClaudeKey);
+    }
+    if (savedGeminiKey) {
+      setGeminiApiKey(savedGeminiKey);
     }
   }, []);
 
@@ -200,6 +208,19 @@ export default function Home() {
       localStorage.setItem('pusher_claude_api_key', claudeApiKey);
     }
   }, [claudeApiKey]);
+
+  // Save Gemini API key to localStorage
+  useEffect(() => {
+    if (geminiApiKey) {
+      localStorage.setItem('pusher_gemini_api_key', geminiApiKey);
+    }
+  }, [geminiApiKey]);
+
+  // Get current model's provider
+  const getSelectedProvider = () => {
+    const model = modelOptions.find(m => m.id === selectedModel);
+    return model?.provider || 'claude';
+  };
 
   // Auto-scroll chat to bottom
   useEffect(() => {
@@ -326,12 +347,15 @@ export default function Home() {
     }
   };
 
-  // Send message to Claude
+  // Send message to AI
   const sendMessage = async () => {
     if (!chatInput.trim() || isSending) return;
 
-    if (!claudeApiKey) {
-      alert('Please set your Claude API key in Settings first');
+    const provider = getSelectedProvider();
+    const apiKey = provider === 'gemini' ? geminiApiKey : claudeApiKey;
+
+    if (!apiKey) {
+      alert(`Please set your ${provider === 'gemini' ? 'Gemini' : 'Claude'} API key in Settings first`);
       setShowSettings(true);
       return;
     }
@@ -348,11 +372,12 @@ export default function Home() {
         fileContext = loadedFiles.map(f => `--- ${f.path} ---\n${f.content}`).join('\n\n');
       }
 
-      const response = await fetch('/api/chat', {
+      const endpoint = provider === 'gemini' ? '/api/gemini' : '/api/chat';
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          apiKey: claudeApiKey,
+          apiKey: apiKey,
           model: selectedModel,
           fileContext: fileContext,
           projectName: loadedProjectName,
@@ -1189,6 +1214,31 @@ export default function Home() {
                   >
                     console.anthropic.com
                   </a>
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-zinc-400 mb-2">
+                  Gemini API Key
+                </label>
+                <input
+                  type="password"
+                  value={geminiApiKey}
+                  onChange={(e) => setGeminiApiKey(e.target.value)}
+                  placeholder="AIzaSy..."
+                  className="input"
+                />
+                <p className="text-xs text-zinc-500 mt-2">
+                  Get your API key at{' '}
+                  <a
+                    href="https://aistudio.google.com/apikey"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-emerald-500 hover:underline"
+                  >
+                    aistudio.google.com
+                  </a>
+                  {' '}- Free tier available!
                 </p>
               </div>
             </div>
