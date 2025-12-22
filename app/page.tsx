@@ -210,27 +210,32 @@ export default function Home() {
   const parseCodeChanges = (content: string): { path: string; content: string }[] => {
     const changes: { path: string; content: string }[] = [];
 
-    // Pattern 1: Look for file paths followed by code blocks
-    // Matches: "**file.tsx**" or "`file.tsx`" or "file.tsx:" followed by ```code```
+    // More flexible patterns to catch various code block formats
     const patterns = [
-      // Pattern: **path/to/file.tsx** followed by ```...```
-      /\*\*([a-zA-Z0-9_\-./]+\.[a-zA-Z]+)\*\*[:\s]*\n*```[\w]*\n([\s\S]*?)```/g,
-      // Pattern: `path/to/file.tsx` followed by ```...```
-      /`([a-zA-Z0-9_\-./]+\.[a-zA-Z]+)`[:\s]*\n*```[\w]*\n([\s\S]*?)```/g,
-      // Pattern: path/to/file.tsx: followed by ```...```
-      /([a-zA-Z0-9_\-./]+\.[a-zA-Z]+):\s*\n*```[\w]*\n([\s\S]*?)```/g,
-      // Pattern: --- path/to/file.tsx --- followed by code
-      /---\s*([a-zA-Z0-9_\-./]+\.[a-zA-Z]+)\s*---\n([\s\S]*?)(?=\n---|\n```|$)/g,
+      // Pattern: **path/to/file.tsx** (with optional colon/newlines) followed by ```code```
+      /\*\*([a-zA-Z0-9_\-./]+\.[a-zA-Z]+)\*\*[:\s]*\n*```[\w]*\n?([\s\S]*?)```/g,
+      // Pattern: `path/to/file.tsx` followed by ```code```
+      /`([a-zA-Z0-9_\-./]+\.[a-zA-Z]+)`[:\s]*\n*```[\w]*\n?([\s\S]*?)```/g,
+      // Pattern: ### path/to/file.tsx or ## path/to/file.tsx
+      /#{2,3}\s*([a-zA-Z0-9_\-./]+\.[a-zA-Z]+)[:\s]*\n*```[\w]*\n?([\s\S]*?)```/g,
+      // Pattern: File: path/to/file.tsx or Modify path/to/file.tsx
+      /(?:File|Modify|Update|Create|Edit)[:\s]+`?([a-zA-Z0-9_\-./]+\.[a-zA-Z]+)`?[:\s]*\n*```[\w]*\n?([\s\S]*?)```/gi,
+      // Pattern: path/to/file.tsx: followed by ```code```
+      /^([a-zA-Z0-9_\-./]+\.[a-zA-Z]+)[:\s]*\n```[\w]*\n?([\s\S]*?)```/gm,
+      // Pattern: Here's the updated/modified path/to/file.tsx
+      /(?:updated|modified|new|changed)\s+`?([a-zA-Z0-9_\-./]+\.[a-zA-Z]+)`?[:\s]*\n*```[\w]*\n?([\s\S]*?)```/gi,
     ];
 
     for (const pattern of patterns) {
       let match;
+      // Reset lastIndex for each pattern
+      pattern.lastIndex = 0;
       while ((match = pattern.exec(content)) !== null) {
         const filePath = match[1];
-        const code = match[2].trim();
+        const code = match[2]?.trim();
 
-        // Only add if it looks like a real file path and has content
-        if (filePath && code && filePath.includes('.') && !changes.find(c => c.path === filePath)) {
+        // Only add if it looks like a real file path and has substantial content
+        if (filePath && code && code.length > 10 && filePath.includes('.') && !changes.find(c => c.path === filePath)) {
           changes.push({ path: filePath, content: code });
         }
       }
