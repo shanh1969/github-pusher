@@ -20,14 +20,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Missing file, owner, or repo' }, { status: 400 });
     }
 
+    const headers = {
+      'Authorization': token,
+      'Accept': 'application/vnd.github.v3+json',
+      'Content-Type': 'application/json',
+      'User-Agent': 'GitHub-Pusher-App',
+    };
+
     // Read the ZIP file
     const arrayBuffer = await file.arrayBuffer();
     const zip = await JSZip.loadAsync(arrayBuffer);
 
-    // Get all files from ZIP (GitHub ZIP has a root folder like "repo-branch-hash/")
-    const files: { path: string; content: string }[] = [];
-
-    // Find the root folder name (GitHub adds one)
+    // Find the root folder name (GitHub adds one like "repo-branch-hash/")
     let rootFolder = '';
     for (const path of Object.keys(zip.files)) {
       if (zip.files[path].dir && path.split('/').length === 2) {
@@ -37,82 +41,140 @@ export async function POST(request: NextRequest) {
     }
 
     // Extract all files
+    const files: { path: string; content: string }[] = [];
     for (const [path, zipEntry] of Object.entries(zip.files)) {
       if (!zipEntry.dir) {
-        // Remove the root folder prefix if it exists
         let cleanPath = path;
         if (rootFolder && path.startsWith(rootFolder)) {
           cleanPath = path.substring(rootFolder.length);
         }
-
-        // Skip if path is empty after removing root folder
         if (!cleanPath) continue;
 
-        // Get file content as string (for text files) or base64 (for binary)
         const content = await zipEntry.async('base64');
         files.push({ path: cleanPath, content });
       }
     }
 
-    // Push each file to GitHub
-    const results = [];
-    for (const file of files) {
-      // Get current file SHA if it exists
-      let sha = '';
-      try {
-        const getResponse = await fetch(
-          `https://api.github.com/repos/${owner}/${repo}/contents/${file.path}?ref=${branch}`,
-          {
-            headers: {
-              'Authorization': token,
-              'Accept': 'application/vnd.github.v3+json',
-              'User-Agent': 'GitHub-Pusher-App',
-            },
-          }
-        );
-        if (getResponse.ok) {
-          const data = await getResponse.json();
-          sha = data.sha;
-        }
-      } catch (e) {
-        // File doesn't exist, that's OK
-      }
+    if (files.length === 0) {
+      return NextResponse.json({ error: 'No files found in ZIP' }, { status: 400 });
+    }
 
-      // Update/create file
-      const updateResponse = await fetch(
-        `https://api.github.com/repos/${owner}/${repo}/contents/${file.path}`,
+    // Step 1: Get the current commit SHA of the branch
+    const refResponse = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${branch}`,
+      { headers }
+    );
+
+    if (!refResponse.ok) {
+      const error = await refResponse.json();
+      return NextResponse.json({ error: `Failed to get branch ref: ${error.message}` }, { status: 400 });
+    }
+
+    const refData = await refResponse.json();
+    const currentCommitSha = refData.object.sha;
+
+    // Step 2: Get the current tree SHA
+    const commitResponse = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/git/commits/${currentCommitSha}`,
+      { headers }
+    );
+    const commitData = await commitResponse.json();
+    const baseTreeSha = commitData.tree.sha;
+
+    // Step 3: Create blobs for all files
+    const treeItems: { path: string; mode: string; type: string; sha: string }[] = [];
+
+    for (const f of files) {
+      const blobResponse = await fetch(
+        `https://api.github.com/repos/${owner}/${repo}/git/blobs`,
         {
-          method: 'PUT',
-          headers: {
-            'Authorization': token,
-            'Accept': 'application/vnd.github.v3+json',
-            'Content-Type': 'application/json',
-            'User-Agent': 'GitHub-Pusher-App',
-          },
+          method: 'POST',
+          headers,
           body: JSON.stringify({
-            message: commitMessage,
-            content: file.content,
-            sha: sha || undefined,
-            branch: branch,
+            content: f.content,
+            encoding: 'base64',
           }),
         }
       );
 
-      if (!updateResponse.ok) {
-        const error = await updateResponse.json();
-        results.push({ path: file.path, success: false, error: error.message });
-      } else {
-        results.push({ path: file.path, success: true });
+      if (!blobResponse.ok) {
+        console.error(`Failed to create blob for ${f.path}`);
+        continue;
       }
+
+      const blobData = await blobResponse.json();
+      treeItems.push({
+        path: f.path,
+        mode: '100644', // Regular file
+        type: 'blob',
+        sha: blobData.sha,
+      });
     }
 
-    const successCount = results.filter(r => r.success).length;
-    const failCount = results.filter(r => !r.success).length;
+    // Step 4: Create a new tree with all files
+    const treeResponse = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/git/trees`,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          base_tree: baseTreeSha,
+          tree: treeItems,
+        }),
+      }
+    );
+
+    if (!treeResponse.ok) {
+      const error = await treeResponse.json();
+      return NextResponse.json({ error: `Failed to create tree: ${error.message}` }, { status: 500 });
+    }
+
+    const treeData = await treeResponse.json();
+
+    // Step 5: Create a new commit
+    const newCommitResponse = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/git/commits`,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          message: commitMessage,
+          tree: treeData.sha,
+          parents: [currentCommitSha],
+        }),
+      }
+    );
+
+    if (!newCommitResponse.ok) {
+      const error = await newCommitResponse.json();
+      return NextResponse.json({ error: `Failed to create commit: ${error.message}` }, { status: 500 });
+    }
+
+    const newCommitData = await newCommitResponse.json();
+
+    // Step 6: Update the branch reference to point to new commit
+    const updateRefResponse = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${branch}`,
+      {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({
+          sha: newCommitData.sha,
+          force: false,
+        }),
+      }
+    );
+
+    if (!updateRefResponse.ok) {
+      const error = await updateRefResponse.json();
+      return NextResponse.json({ error: `Failed to update branch: ${error.message}` }, { status: 500 });
+    }
 
     return NextResponse.json({
       success: true,
-      message: `Uploaded ${successCount} files, ${failCount} failed`,
-      results,
+      message: `Pushed ${treeItems.length} files in a single commit`,
+      commitSha: newCommitData.sha,
+      commitUrl: `https://github.com/${owner}/${repo}/commit/${newCommitData.sha}`,
     });
 
   } catch (error: any) {
