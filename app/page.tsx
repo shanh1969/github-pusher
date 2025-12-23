@@ -882,7 +882,7 @@ export default function Home() {
               <UploadIcon />
             </div>
             <div>
-              <h1 className="text-xl font-bold">GitHub Pusher <span className="text-sm font-normal text-zinc-500">v1.1.0</span></h1>
+              <h1 className="text-xl font-bold">GitHub Pusher <span className="text-sm font-normal text-zinc-500">v1.2.0</span></h1>
               <p className="text-xs text-zinc-500">Push to GitHub from anywhere</p>
             </div>
           </div>
