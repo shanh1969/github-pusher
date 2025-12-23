@@ -163,7 +163,7 @@ export default function Home() {
     { id: 'claude-opus-4-5-20251101', name: 'Claude Opus 4.5', desc: 'Most capable', provider: 'claude' },
     { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', desc: 'Fast & smart', provider: 'claude' },
     { id: 'claude-3-5-haiku-20241022', name: 'Claude Haiku 3.5', desc: 'Fastest', provider: 'claude' },
-    { id: 'gemini-3.0-flash', name: 'Gemini 3.0 Flash', desc: 'Newest & free', provider: 'gemini' },
+    { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', desc: 'Newest & free', provider: 'gemini' },
     { id: 'gemini-2.0-flash-exp', name: 'Gemini 2.0 Flash Exp', desc: 'Latest stable', provider: 'gemini' },
     { id: 'gemini-2.0-flash-thinking-exp-1219', name: 'Gemini 2.0 Thinking', desc: 'Reasoning', provider: 'gemini' },
     { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', desc: 'Advanced', provider: 'gemini' },
