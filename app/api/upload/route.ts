@@ -10,14 +10,16 @@ export async function POST(request: NextRequest) {
 
   try {
     const formData = await request.formData();
-    const file = formData.get('file') as File;
+    const uploadedFiles = formData.getAll('files') as File[];
+    const zipFile = formData.get('zipFile') as File | null;
     const owner = formData.get('owner') as string;
     const repo = formData.get('repo') as string;
     const branch = formData.get('branch') as string || 'main';
-    const commitMessage = formData.get('commitMessage') as string || 'Update from ZIP upload';
+    const commitMessage = formData.get('commitMessage') as string || 'Update from GitHub Pusher';
+    const targetPath = formData.get('path') as string || ''; // Optional subfolder
 
-    if (!file || !owner || !repo) {
-      return NextResponse.json({ error: 'Missing file, owner, or repo' }, { status: 400 });
+    if ((!uploadedFiles.length && !zipFile) || !owner || !repo) {
+      return NextResponse.json({ error: 'Missing files, owner, or repo' }, { status: 400 });
     }
 
     const headers = {
@@ -27,36 +29,47 @@ export async function POST(request: NextRequest) {
       'User-Agent': 'GitHub-Pusher-App',
     };
 
-    // Read the ZIP file
-    const arrayBuffer = await file.arrayBuffer();
-    const zip = await JSZip.loadAsync(arrayBuffer);
+    const filesToPush: { path: string; content: string }[] = [];
 
-    // Find the root folder name (GitHub adds one like "repo-branch-hash/")
-    let rootFolder = '';
-    for (const path of Object.keys(zip.files)) {
-      if (zip.files[path].dir && path.split('/').length === 2) {
-        rootFolder = path;
-        break;
-      }
-    }
-
-    // Extract all files
-    const files: { path: string; content: string }[] = [];
-    for (const [path, zipEntry] of Object.entries(zip.files)) {
-      if (!zipEntry.dir) {
-        let cleanPath = path;
-        if (rootFolder && path.startsWith(rootFolder)) {
-          cleanPath = path.substring(rootFolder.length);
+    // Handle ZIP file if provided
+    if (zipFile) {
+      const arrayBuffer = await zipFile.arrayBuffer();
+      const zip = await JSZip.loadAsync(arrayBuffer);
+      
+      let rootFolder = '';
+      for (const path of Object.keys(zip.files)) {
+        if (zip.files[path].dir && path.split('/').length === 2) {
+          rootFolder = path;
+          break;
         }
-        if (!cleanPath) continue;
+      }
 
-        const content = await zipEntry.async('base64');
-        files.push({ path: cleanPath, content });
+      for (const [path, zipEntry] of Object.entries(zip.files)) {
+        if (!zipEntry.dir) {
+          let cleanPath = path;
+          if (rootFolder && path.startsWith(rootFolder)) {
+            cleanPath = path.substring(rootFolder.length);
+          }
+          if (!cleanPath) continue;
+          const content = await zipEntry.async('base64');
+          filesToPush.push({ path: cleanPath, content });
+        }
       }
     }
 
-    if (files.length === 0) {
-      return NextResponse.json({ error: 'No files found in ZIP' }, { status: 400 });
+    // Handle individual files/photos
+    for (const file of uploadedFiles) {
+      const buffer = await file.arrayBuffer();
+      const base64Content = Buffer.from(buffer).toString('base64');
+      const filePath = targetPath 
+        ? `${targetPath.replace(/\/$/, '')}/${file.name}` 
+        : file.name;
+      
+      filesToPush.push({ path: filePath, content: base64Content });
+    }
+
+    if (filesToPush.length === 0) {
+      return NextResponse.json({ error: 'No files to upload' }, { status: 400 });
     }
 
     // Step 1: Get the current commit SHA of the branch
@@ -84,7 +97,7 @@ export async function POST(request: NextRequest) {
     // Step 3: Create blobs for all files
     const treeItems: { path: string; mode: string; type: string; sha: string }[] = [];
 
-    for (const f of files) {
+    for (const f of filesToPush) {
       const blobResponse = await fetch(
         `https://api.github.com/repos/${owner}/${repo}/git/blobs`,
         {
@@ -97,21 +110,18 @@ export async function POST(request: NextRequest) {
         }
       );
 
-      if (!blobResponse.ok) {
-        console.error(`Failed to create blob for ${f.path}`);
-        continue;
-      }
+      if (!blobResponse.ok) continue;
 
       const blobData = await blobResponse.json();
       treeItems.push({
         path: f.path,
-        mode: '100644', // Regular file
+        mode: '100644',
         type: 'blob',
         sha: blobData.sha,
       });
     }
 
-    // Step 4: Create a new tree with all files
+    // Step 4: Create a new tree
     const treeResponse = await fetch(
       `https://api.github.com/repos/${owner}/${repo}/git/trees`,
       {
@@ -123,11 +133,6 @@ export async function POST(request: NextRequest) {
         }),
       }
     );
-
-    if (!treeResponse.ok) {
-      const error = await treeResponse.json();
-      return NextResponse.json({ error: `Failed to create tree: ${error.message}` }, { status: 500 });
-    }
 
     const treeData = await treeResponse.json();
 
@@ -145,15 +150,10 @@ export async function POST(request: NextRequest) {
       }
     );
 
-    if (!newCommitResponse.ok) {
-      const error = await newCommitResponse.json();
-      return NextResponse.json({ error: `Failed to create commit: ${error.message}` }, { status: 500 });
-    }
-
     const newCommitData = await newCommitResponse.json();
 
-    // Step 6: Update the branch reference to point to new commit
-    const updateRefResponse = await fetch(
+    // Step 6: Update the branch reference
+    await fetch(
       `https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${branch}`,
       {
         method: 'PATCH',
@@ -165,23 +165,13 @@ export async function POST(request: NextRequest) {
       }
     );
 
-    if (!updateRefResponse.ok) {
-      const error = await updateRefResponse.json();
-      return NextResponse.json({ error: `Failed to update branch: ${error.message}` }, { status: 500 });
-    }
-
     return NextResponse.json({
       success: true,
-      message: `Pushed ${treeItems.length} files in a single commit`,
-      commitSha: newCommitData.sha,
-      commitUrl: `https://github.com/${owner}/${repo}/commit/${newCommitData.sha}`,
+      message: `Successfully pushed ${filesToPush.length} files`,
+      url: `https://github.com/${owner}/${repo}/commit/${newCommitData.sha}`
     });
 
   } catch (error: any) {
-    console.error('Upload error:', error);
-    return NextResponse.json(
-      { error: error.message || 'Failed to upload ZIP' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
